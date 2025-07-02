@@ -1,0 +1,55 @@
+{
+  "name": "lnkd-contract",
+  "version": "1.0.0",
+  "description": "LNKD Token Contract for InterLink Ecosystem",
+  "main": "index.js",
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
+  },
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "deploy": "hardhat run scripts/deploy.js --network bsc",
+    "deploy:testnet": "hardhat run scripts/deploy.js --network bscTestnet",
+    "setup": "hardhat run scripts/setup.js --network bsc",
+    "setup:testnet": "hardhat run scripts/setup.js --network bscTestnet",
+    "verify": "hardhat run scripts/verify.js --network bsc",
+    "verify:testnet": "hardhat run scripts/verify.js --network bscTestnet",
+    "verify:hardhat": "hardhat verify --network bsc",
+    "verify:hardhat:testnet": "hardhat verify --network bscTestnet"
+  },
+  "keywords": [
+    "bsc",
+    "token",
+    "defi",
+    "interlink"
+  ],
+  "author": "InterLink Team",
+  "license": "MIT",
+  "devDependencies": {
+    "@nomicfoundation/hardhat-chai-matchers": "^2.0.0",
+    "@nomicfoundation/hardhat-ethers": "^3.0.0",
+    "@nomicfoundation/hardhat-network-helpers": "^1.0.0",
+    "@nomicfoundation/hardhat-toolbox": "^3.0.0",
+    "@nomicfoundation/hardhat-verify": "^1.1.0",
+    "@openzeppelin/contracts": "^4.9.3",
+    "@typechain/ethers-v6": "^0.4.0",
+    "@typechain/hardhat": "^8.0.0",
+    "@types/chai": "^4.2.0",
+    "@types/mocha": "^10.0.0",
+    "chai": "^4.2.0",
+    "dotenv": "^16.3.1",
+    "ethers": "^6.4.0",
+    "forge-std": "^1.1.2",
+    "hardhat": "^2.17.0",
+    "hardhat-gas-reporter": "^1.0.8",
+    "solidity-coverage": "^0.8.1",
+    "ts-node": "^10.9.0",
+    "typechain": "^8.2.0",
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "^4.9.3"
+  }
+}

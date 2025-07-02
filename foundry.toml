@@ -1,0 +1,28 @@
+[profile.default]
+src = "contracts"
+out = "out"
+libs = ["lib"]
+solc_version = "0.8.20"
+optimizer = true
+optimizer_runs = 200
+via_ir = false
+
+[rpc_endpoints]
+bsc = "https://bsc-dataseed1.binance.org/"
+bsc_testnet = "https://data-seed-prebsc-1-s1.binance.org:8545/"
+
+[etherscan]
+bsc = { key = "${BSCSCAN_API_KEY}" }
+
+# Fork settings for BSC mainnet
+[profile.fork]
+bsc_fork = { url = "https://bsc-dataseed1.binance.org/", block_number = 35000000 }
+
+# Test settings
+[profile.default.fuzz]
+runs = 1000
+
+[profile.default.invariant]
+runs = 1000
+depth = 15
+fail_on_revert = false 
