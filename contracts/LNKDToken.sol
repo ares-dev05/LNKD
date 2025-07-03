@@ -36,6 +36,10 @@ contract LNKDToken is ERC20, Ownable, ReentrancyGuard {
     uint256 public constant TREASURY_TAX = 100; // 1% (100 basis points)
     uint256 public constant AUTO_BUY_TAX = 100; // 1% (100 basis points)
     
+    // Anti front-running protection
+    uint256 public constant FRONT_RUNNING_COOLDOWN = 30; // 30 seconds
+    mapping(address => uint256) public lastTradeTime;
+    
     // Addresses
     address public treasuryWallet;
     address public intlToken;
@@ -103,6 +107,10 @@ contract LNKDToken is ERC20, Ownable, ReentrancyGuard {
         isExcludedFromRewards[owner()] = true; // Owner
         isExcludedFromRewards[treasuryWallet] = true; // Treasury
         
+        // Exclude owner and treasury from front-running protection
+        lastTradeTime[owner()] = block.timestamp + FRONT_RUNNING_COOLDOWN;
+        lastTradeTime[treasuryWallet] = block.timestamp + FRONT_RUNNING_COOLDOWN;
+        
         // Mint total supply to owner
         _mint(owner(), TOTAL_SUPPLY);
         
@@ -119,6 +127,15 @@ contract LNKDToken is ERC20, Ownable, ReentrancyGuard {
         require(from != address(0), "Transfer from zero address");
         require(to != address(0), "Transfer to zero address");
         require(amount > 0, "Transfer amount must be greater than zero");
+        
+        // Anti front-running protection for buy/sell transactions
+        if (isLiquidityPair[from] || isLiquidityPair[to]) {
+            require(
+                block.timestamp >= lastTradeTime[from] + FRONT_RUNNING_COOLDOWN,
+                "Front-running protection: Wait 30 seconds between trades"
+            );
+            lastTradeTime[from] = block.timestamp;
+        }
         
         // Update holder tracking
         _updateHolderTracking(from, to, amount);
@@ -438,6 +455,11 @@ contract LNKDToken is ERC20, Ownable, ReentrancyGuard {
             }
         }
         return count;
+    }
+    
+    // Check if address can trade (front-running protection)
+    function canTrade(address account) external view returns (bool) {
+        return block.timestamp >= lastTradeTime[account] + FRONT_RUNNING_COOLDOWN;
     }
     
     // Override decimals

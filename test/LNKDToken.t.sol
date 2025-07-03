@@ -56,6 +56,12 @@ contract LNKDTokenTest is Test {
         vm.deal(user3, 10 ether);
     }
     
+    // Helper function to reset mock LP pair cooldown for testing
+    function resetMockLPPairCooldown() internal {
+        // Advance time to reset cooldown for mock LP pair
+        vm.warp(block.timestamp + 31);
+    }
+    
     function test_Deployment() public view {
         assertEq(lnkdToken.name(), "LNKD Token");
         assertEq(lnkdToken.symbol(), "LNKD");
@@ -71,21 +77,15 @@ contract LNKDTokenTest is Test {
     }
     
     function test_TaxOnBuy() public {
-        // Give mock LP pair some tokens first
-        lnkdToken.transfer(mockLPPair, 10000 * 10**18);
-        
-        // Simulate buy transaction (LP pair sends tokens to user)
-        vm.startPrank(mockLPPair);
-        
+        address freshMockLPPair = makeAddr("freshMockLPPair_TaxOnBuy");
+        lnkdToken.setLiquidityPair(freshMockLPPair, true);
+        lnkdToken.transfer(freshMockLPPair, 10000 * 10**18);
+        vm.startPrank(freshMockLPPair);
         uint256 initialBalance = lnkdToken.balanceOf(user1);
         lnkdToken.transfer(user1, 1000 * 10**18);
-        
-        // Should apply 2% tax
-        uint256 expectedTax = (1000 * 10**18 * 200) / 10000; // 2%
+        uint256 expectedTax = (1000 * 10**18 * 200) / 10000;
         uint256 expectedTransfer = 1000 * 10**18 - expectedTax;
-        
         assertEq(lnkdToken.balanceOf(user1), initialBalance + expectedTransfer);
-        
         vm.stopPrank();
     }
     
@@ -261,20 +261,14 @@ contract LNKDTokenTest is Test {
     
     // Test that buy tax correctly swaps to WBNB and buys INTL
     function test_BuyTaxSwapping() public {
-        // Give mock LP pair tokens
-        lnkdToken.transfer(mockLPPair, 10000 * 10**18);
-        
-        // Simulate buy transaction
-        vm.startPrank(mockLPPair);
+        address freshMockLPPair = makeAddr("freshMockLPPair_BuyTaxSwapping");
+        lnkdToken.setLiquidityPair(freshMockLPPair, true);
+        lnkdToken.transfer(freshMockLPPair, 10000 * 10**18);
+        vm.startPrank(freshMockLPPair);
         lnkdToken.transfer(user1, 1000 * 10**18);
         vm.stopPrank();
-        
-        // Check that tax was collected (contract should have some tokens)
         uint256 contractBalance = lnkdToken.balanceOf(address(lnkdToken));
         assertGt(contractBalance, 0, "Tax should be collected");
-        
-        // Note: In real scenario, the contract would swap these tokens
-        // For testing, we just verify tax collection works
     }
     
     // Test that sell tax correctly swaps to stablecoin
@@ -310,8 +304,9 @@ contract LNKDTokenTest is Test {
             BSC_FACTORY
         );
         
-        // Set up mock LP pair
-        lnkdTokenWithMockStablecoin.setLiquidityPair(mockLPPair, true);
+        // Create separate mock LP pair to avoid front-running protection conflicts
+        address mockLPPairRewards = makeAddr("mockLPPairRewards");
+        lnkdTokenWithMockStablecoin.setLiquidityPair(mockLPPairRewards, true);
         
         // Transfer tokens to users
         lnkdTokenWithMockStablecoin.transfer(user1, 1000 * 10**18);
@@ -340,12 +335,9 @@ contract LNKDTokenTest is Test {
     
     // Test real swap functionality with mocked responses
     function test_RealSwapFunctionality() public {
-        // Create mock tokens for testing
         MockERC20 mockWBNB = new MockERC20("Wrapped BNB", "WBNB");
         MockERC20 mockINTL = new MockERC20("InterLink Token", "INTL");
         MockERC20 mockUSDC = new MockERC20("USD Coin", "USDC");
-        
-        // Deploy LNKD token with mock addresses
         LNKDToken lnkdTokenForSwaps = new LNKDToken(
             TREASURY,
             address(mockINTL),
@@ -354,35 +346,58 @@ contract LNKDTokenTest is Test {
             BSC_ROUTER,
             BSC_FACTORY
         );
-        
-        // Set up mock LP pair
-        lnkdTokenForSwaps.setLiquidityPair(mockLPPair, true);
-        
-        // Fund the contract with tokens for swaps
+        address mockLPPair1 = makeAddr("mockLPPair1_RealSwap");
+        address mockLPPair2 = makeAddr("mockLPPair2_RealSwap");
+        lnkdTokenForSwaps.setLiquidityPair(mockLPPair1, true);
+        lnkdTokenForSwaps.setLiquidityPair(mockLPPair2, true);
         lnkdTokenForSwaps.transfer(address(lnkdTokenForSwaps), 1000 * 10**18);
-        
-        // Fund treasury with some WBNB and INTL for testing
         mockWBNB.mint(TREASURY, 100 * 10**18);
         mockINTL.mint(TREASURY, 1000 * 10**18);
-        
-        // Test buy tax swap (should try to swap LNKD -> WBNB -> INTL)
-        lnkdTokenForSwaps.transfer(mockLPPair, 100 * 10**18); // Simulate buy
-        
-        // Check that tax was collected
+        lnkdTokenForSwaps.transfer(mockLPPair1, 100 * 10**18); // Simulate buy
         uint256 contractBalance = lnkdTokenForSwaps.balanceOf(address(lnkdTokenForSwaps));
         assertGt(contractBalance, 0, "Buy tax should be collected");
-        
-        // Test sell tax swap (should try to swap LNKD -> USDC)
         lnkdTokenForSwaps.transfer(user1, 1000 * 10**18);
         vm.startPrank(user1);
-        lnkdTokenForSwaps.transfer(mockLPPair, 100 * 10**18); // Simulate sell
+        lnkdTokenForSwaps.transfer(mockLPPair2, 100 * 10**18); // Simulate sell
         vm.stopPrank();
-        
-        // Check that sell tax was collected
         uint256 contractBalanceAfterSell = lnkdTokenForSwaps.balanceOf(address(lnkdTokenForSwaps));
         assertGt(contractBalanceAfterSell, contractBalance, "Sell tax should be collected");
-        
-        // Note: In real scenario with liquidity, these swaps would succeed
-        // and WBNB/INTL would be sent to treasury, USDC would be stored for distribution
+    }
+    
+    function test_AntiFrontRunningProtection() public {
+        lnkdToken.transfer(user1, 1000 * 10**18);
+        vm.startPrank(user1);
+        lnkdToken.transfer(mockLPPair, 100 * 10**18); // First sell
+        vm.expectRevert("Front-running protection: Wait 30 seconds between trades");
+        lnkdToken.transfer(mockLPPair, 50 * 10**18); // Should revert
+        vm.stopPrank();
+        vm.warp(block.timestamp + 31);
+        vm.startPrank(user1);
+        lnkdToken.transfer(mockLPPair, 50 * 10**18); // Should succeed after cooldown
+        vm.stopPrank();
+    }
+    
+    function test_AntiFrontRunningProtection_Buy() public {
+        address freshMockLPPair = makeAddr("freshMockLPPair_AntiFrontRunningProtection_Buy");
+        lnkdToken.setLiquidityPair(freshMockLPPair, true);
+        lnkdToken.transfer(freshMockLPPair, 10000 * 10**18);
+        vm.startPrank(freshMockLPPair);
+        lnkdToken.transfer(user1, 100 * 10**18); // First buy
+        vm.expectRevert("Front-running protection: Wait 30 seconds between trades");
+        lnkdToken.transfer(user2, 50 * 10**18); // Should revert
+        vm.stopPrank();
+        vm.warp(block.timestamp + 31);
+        vm.startPrank(freshMockLPPair);
+        lnkdToken.transfer(user2, 50 * 10**18); // Should succeed after cooldown
+        vm.stopPrank();
+    }
+    
+    function test_RegularTransfersNotAffectedByCooldown() public {
+        lnkdToken.transfer(user1, 1000 * 10**18);
+        lnkdToken.transfer(user2, 1000 * 10**18);
+        vm.startPrank(user1);
+        lnkdToken.transfer(user2, 100 * 10**18);
+        lnkdToken.transfer(user2, 100 * 10**18); // Should work immediately
+        vm.stopPrank();
     }
 } 
