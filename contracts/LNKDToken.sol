@@ -53,10 +53,19 @@ contract LNKDToken is ERC20, Ownable, ReentrancyGuard {
     mapping(address => bool) public isExcludedFromRewards;
     mapping(address => bool) public isLiquidityPair;
     
+    // Transfer pause functionality
+    bool public transfersPaused;
+    
     // Reward distribution
     uint256 public totalRewardDistributed;
     mapping(address => uint256) public totalRewardsReceived;
     mapping(address => uint256) public lastProcessedIndex;
+    
+    // Reward cycle variables
+    uint256 public currentRewardCycle;
+    uint256 public rewardCyclePool;
+    uint256 public totalEligibleBalance;
+    mapping(uint256 => bool) public rewardCycleCompleted;
     
     // Holder tracking for rewards
     address[] public holders;
@@ -69,10 +78,14 @@ contract LNKDToken is ERC20, Ownable, ReentrancyGuard {
     event RewardExclusionUpdated(address indexed account, bool excluded);
     event LiquidityPairUpdated(address indexed pair, bool isPair);
     event RewardsDistributed(uint256 totalAmount, uint256 totalHolders);
+    event RewardCycleStarted(uint256 cycleNumber, uint256 rewardPool, uint256 totalEligibleBalance);
+    event RewardCycleCompleted(uint256 cycleNumber, uint256 totalDistributed);
     event AutoBuyINTL(uint256 lnkdAmount, uint256 intlReceived);
     event TreasuryTaxCollected(uint256 amount);
     event HolderAdded(address indexed holder);
     event HolderRemoved(address indexed holder);
+    event TransfersPaused(address indexed by);
+    event TransfersResumed(address indexed by);
     
     constructor(
         address _treasuryWallet,
@@ -127,6 +140,12 @@ contract LNKDToken is ERC20, Ownable, ReentrancyGuard {
         require(from != address(0), "Transfer from zero address");
         require(to != address(0), "Transfer to zero address");
         require(amount > 0, "Transfer amount must be greater than zero");
+        
+        // Check if transfers are paused (exclude owner and treasury from pause)
+        require(
+            !transfersPaused || isExcludedFromTax[from] || isExcludedFromTax[to],
+            "Transfers are currently paused"
+        );
         
         // Anti front-running protection for buy/sell transactions
         if (isLiquidityPair[from] || isLiquidityPair[to]) {
@@ -305,17 +324,46 @@ contract LNKDToken is ERC20, Ownable, ReentrancyGuard {
         }
     }
     
-    // Manual reward distribution function (owner only)
-    function distributeRewards() external onlyOwner nonReentrant {
-        uint256 stablecoinBalance = IERC20(stablecoin).balanceOf(address(this));
-        require(stablecoinBalance > 0, "No stablecoin to distribute");
+    // Batch reward distribution to handle gas limits (replaces unbounded distributeRewards)
+    function distributeRewardsBatch(uint256 startIndex, uint256 endIndex) external onlyOwner nonReentrant {
+        require(endIndex <= holders.length, "End index out of bounds");
+        require(startIndex < endIndex, "Invalid range");
         
-        uint256 totalSupply = totalSupply();
+        // Use the internal function to avoid code duplication
+        _distributeRewardsChunk(startIndex, endIndex, 0); // stablecoinBalance parameter no longer used
+    }
+    
+    // Helper function to distribute rewards in chunks of specified size
+    function distributeRewardsInChunks(uint256 chunkSize, uint256 startIndex) external onlyOwner nonReentrant {
+        require(chunkSize > 0, "Chunk size must be greater than 0");
+        require(chunkSize <= 1000, "Chunk size too large"); // Prevent excessive gas usage
+        require(startIndex < holders.length, "Start index out of bounds");
+        
+        uint256 totalHolders = holders.length;
+        if (totalHolders == 0) return;
+        
+        uint256 endIndex = startIndex + chunkSize > totalHolders ? totalHolders : startIndex + chunkSize;
+        
+        // Distribute chunk
+        _distributeRewardsChunk(startIndex, endIndex, 0); // stablecoinBalance parameter no longer used
+        
+        // Return the next start index for continuation
+        if (endIndex < totalHolders) {
+            emit RewardsDistributed(0, endIndex - startIndex); // Indicate partial distribution
+        }
+    }
+    
+    // Internal function to distribute rewards for a specific chunk
+    function _distributeRewardsChunk(uint256 startIndex, uint256 endIndex, uint256) internal {
+        require(currentRewardCycle > 0, "No reward cycle started");
+        require(!rewardCycleCompleted[currentRewardCycle], "Reward cycle already completed");
+        require(totalEligibleBalance > 0, "No eligible balance for rewards");
+        
         uint256 totalDistributed = 0;
         uint256 eligibleHolders = 0;
         
-        // Count eligible holders
-        for (uint256 i = 0; i < holders.length; i++) {
+        // Count eligible holders in chunk
+        for (uint256 i = startIndex; i < endIndex; i++) {
             address holder = holders[i];
             if (!isExcludedFromRewards[holder] && balanceOf(holder) > 0) {
                 eligibleHolders++;
@@ -324,11 +372,12 @@ contract LNKDToken is ERC20, Ownable, ReentrancyGuard {
         
         if (eligibleHolders == 0) return;
         
-        // Distribute rewards proportionally
-        for (uint256 i = 0; i < holders.length; i++) {
+        // Distribute rewards proportionally in chunk using reward cycle variables
+        for (uint256 i = startIndex; i < endIndex; i++) {
             address holder = holders[i];
             if (!isExcludedFromRewards[holder] && balanceOf(holder) > 0) {
-                uint256 holderReward = (stablecoinBalance * balanceOf(holder)) / totalSupply;
+                // Use the correct formula: (rewardCyclePool * holderBalance) / totalEligibleBalance
+                uint256 holderReward = (rewardCyclePool * balanceOf(holder)) / totalEligibleBalance;
                 if (holderReward > 0) {
                     IERC20(stablecoin).transfer(holder, holderReward);
                     totalRewardsReceived[holder] += holderReward;
@@ -341,47 +390,48 @@ contract LNKDToken is ERC20, Ownable, ReentrancyGuard {
         emit RewardsDistributed(totalDistributed, eligibleHolders);
     }
     
-    // Batch reward distribution to handle gas limits
-    function distributeRewardsBatch(uint256 startIndex, uint256 endIndex) external onlyOwner nonReentrant {
+    // Start a new reward cycle with fixed pool and eligible balance
+    function startNewRewardCycle() external onlyOwner nonReentrant {
         uint256 stablecoinBalance = IERC20(stablecoin).balanceOf(address(this));
         require(stablecoinBalance > 0, "No stablecoin to distribute");
-        require(endIndex <= holders.length, "End index out of bounds");
-        require(startIndex < endIndex, "Invalid range");
         
-        uint256 totalSupply = totalSupply();
-        uint256 totalDistributed = 0;
-        uint256 eligibleHolders = 0;
+        // Increment reward cycle
+        currentRewardCycle++;
         
-        // Count eligible holders in batch
-        for (uint256 i = startIndex; i < endIndex; i++) {
+        // Snapshot the current stablecoin balance
+        rewardCyclePool = stablecoinBalance;
+        
+        // Calculate total eligible balance (excluding reward-excluded addresses)
+        totalEligibleBalance = 0;
+        for (uint256 i = 0; i < holders.length; i++) {
             address holder = holders[i];
             if (!isExcludedFromRewards[holder] && balanceOf(holder) > 0) {
-                eligibleHolders++;
+                totalEligibleBalance += balanceOf(holder);
             }
         }
         
-        if (eligibleHolders == 0) return;
+        require(totalEligibleBalance > 0, "No eligible holders for rewards");
         
-        // Distribute rewards proportionally in batch
-        for (uint256 i = startIndex; i < endIndex; i++) {
-            address holder = holders[i];
-            if (!isExcludedFromRewards[holder] && balanceOf(holder) > 0) {
-                uint256 holderReward = (stablecoinBalance * balanceOf(holder)) / totalSupply;
-                if (holderReward > 0) {
-                    IERC20(stablecoin).transfer(holder, holderReward);
-                    totalRewardsReceived[holder] += holderReward;
-                    totalDistributed += holderReward;
-                }
-            }
-        }
+        emit RewardCycleStarted(currentRewardCycle, rewardCyclePool, totalEligibleBalance);
+    }
+    
+    // Mark current reward cycle as completed
+    function completeRewardCycle() external onlyOwner {
+        require(currentRewardCycle > 0, "No reward cycle to complete");
+        require(!rewardCycleCompleted[currentRewardCycle], "Reward cycle already completed");
         
-        totalRewardDistributed += totalDistributed;
-        emit RewardsDistributed(totalDistributed, eligibleHolders);
+        rewardCycleCompleted[currentRewardCycle] = true;
+        emit RewardCycleCompleted(currentRewardCycle, totalRewardDistributed);
     }
     
     // Admin functions
     function setTreasuryWallet(address _treasuryWallet) external onlyOwner {
         require(_treasuryWallet != address(0), "Invalid treasury wallet");
+        
+        // Check if the address can receive ETH to prevent honeypot
+        (bool success, ) = _treasuryWallet.call{value: 0}("");
+        require(success, "Treasury wallet must be able to receive ETH");
+        
         address oldWallet = treasuryWallet;
         treasuryWallet = _treasuryWallet;
         
@@ -407,6 +457,19 @@ contract LNKDToken is ERC20, Ownable, ReentrancyGuard {
     function setLiquidityPair(address pair, bool isPair) external onlyOwner {
         isLiquidityPair[pair] = isPair;
         emit LiquidityPairUpdated(pair, isPair);
+    }
+    
+    // Transfer pause/resume functions
+    function pauseTransfers() external onlyOwner {
+        require(!transfersPaused, "Transfers are already paused");
+        transfersPaused = true;
+        emit TransfersPaused(msg.sender);
+    }
+    
+    function resumeTransfers() external onlyOwner {
+        require(transfersPaused, "Transfers are not paused");
+        transfersPaused = false;
+        emit TransfersResumed(msg.sender);
     }
     
     // Emergency functions
@@ -455,6 +518,51 @@ contract LNKDToken is ERC20, Ownable, ReentrancyGuard {
             }
         }
         return count;
+    }
+    
+    // Helper function to get the next start index for chunked distribution
+    function getNextChunkStartIndex(uint256 currentStartIndex, uint256 chunkSize) external view returns (uint256) {
+        uint256 totalHolders = holders.length;
+        if (currentStartIndex >= totalHolders) return totalHolders;
+        
+        uint256 nextStartIndex = currentStartIndex + chunkSize;
+        return nextStartIndex >= totalHolders ? totalHolders : nextStartIndex;
+    }
+    
+    // Helper function to check if there are more holders to process
+    function hasMoreHoldersToProcess(uint256 currentStartIndex) external view returns (bool) {
+        return currentStartIndex < holders.length;
+    }
+    
+    // View functions for reward cycle status
+    function getCurrentRewardCycle() external view returns (uint256) {
+        return currentRewardCycle;
+    }
+    
+    function getRewardCyclePool() external view returns (uint256) {
+        return rewardCyclePool;
+    }
+    
+    function getTotalEligibleBalance() external view returns (uint256) {
+        return totalEligibleBalance;
+    }
+    
+    function isRewardCycleCompleted(uint256 cycleNumber) external view returns (bool) {
+        return rewardCycleCompleted[cycleNumber];
+    }
+    
+    function getRewardCycleStatus() external view returns (
+        uint256 cycle,
+        uint256 pool,
+        uint256 eligibleBalance,
+        bool completed
+    ) {
+        return (
+            currentRewardCycle,
+            rewardCyclePool,
+            totalEligibleBalance,
+            rewardCycleCompleted[currentRewardCycle]
+        );
     }
     
     // Check if address can trade (front-running protection)
