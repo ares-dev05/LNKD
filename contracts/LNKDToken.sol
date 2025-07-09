@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity 0.8.20;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -53,9 +53,6 @@ contract LNKDToken is ERC20, Ownable, ReentrancyGuard {
     mapping(address => bool) public isExcludedFromRewards;
     mapping(address => bool) public isLiquidityPair;
     
-    // Transfer pause functionality
-    bool public transfersPaused;
-    
     // Reward distribution
     uint256 public totalRewardDistributed;
     mapping(address => uint256) public totalRewardsReceived;
@@ -84,7 +81,6 @@ contract LNKDToken is ERC20, Ownable, ReentrancyGuard {
     event TreasuryTaxCollected(uint256 amount);
     event HolderAdded(address indexed holder);
     event HolderRemoved(address indexed holder);
-    event TransfersPaused(address indexed by);
     event TransfersResumed(address indexed by);
     
     constructor(
@@ -140,12 +136,6 @@ contract LNKDToken is ERC20, Ownable, ReentrancyGuard {
         require(from != address(0), "Transfer from zero address");
         require(to != address(0), "Transfer to zero address");
         require(amount > 0, "Transfer amount must be greater than zero");
-        
-        // Check if transfers are paused (exclude owner and treasury from pause)
-        require(
-            !transfersPaused || isExcludedFromTax[from] || isExcludedFromTax[to],
-            "Transfers are currently paused"
-        );
         
         // Anti front-running protection for buy/sell transactions
         if (isLiquidityPair[from] || isLiquidityPair[to]) {
@@ -457,19 +447,6 @@ contract LNKDToken is ERC20, Ownable, ReentrancyGuard {
     function setLiquidityPair(address pair, bool isPair) external onlyOwner {
         isLiquidityPair[pair] = isPair;
         emit LiquidityPairUpdated(pair, isPair);
-    }
-    
-    // Transfer pause/resume functions
-    function pauseTransfers() external onlyOwner {
-        require(!transfersPaused, "Transfers are already paused");
-        transfersPaused = true;
-        emit TransfersPaused(msg.sender);
-    }
-    
-    function resumeTransfers() external onlyOwner {
-        require(transfersPaused, "Transfers are not paused");
-        transfersPaused = false;
-        emit TransfersResumed(msg.sender);
     }
     
     // Emergency functions
