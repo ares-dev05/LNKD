@@ -15,6 +15,8 @@ contract LNKDAutomation is Ownable, ReentrancyGuard {
     
     event DistributionExecuted(uint256 timestamp, uint256 stablecoinBalance);
     event OwnershipReturned(address indexed previousOwner, address indexed newOwner);
+    event DistributionIntervalUpdated(uint256 oldInterval, uint256 newInterval);
+    event MinRewardThresholdUpdated(uint256 oldThreshold, uint256 newThreshold);
     
     constructor(address _lnkdToken) {
         require(_lnkdToken != address(0), "Invalid LNKD token address");
@@ -80,16 +82,21 @@ contract LNKDAutomation is Ownable, ReentrancyGuard {
         emit OwnershipReturned(owner(), newOwner);
     }
     
-    // Configuration functions
+        // Configuration functions
     function setDistributionInterval(uint256 newInterval) external onlyOwner {
         require(newInterval >= 1 hours, "Interval too short");
         require(newInterval <= 7 days, "Interval too long");
+        uint256 oldInterval = distributionInterval;
         distributionInterval = newInterval;
+        emit DistributionIntervalUpdated(oldInterval, newInterval);
     }
-    
+
     function setMinRewardThreshold(uint256 newThreshold) external onlyOwner {
         require(newThreshold > 0, "Threshold must be greater than 0");
+        require(newThreshold <= 10000 * 10**18, "Threshold too high (max 10,000 USDT)");
+        uint256 oldThreshold = minRewardThreshold;
         minRewardThreshold = newThreshold;
+        emit MinRewardThresholdUpdated(oldThreshold, newThreshold);
     }
     
     // Emergency functions
